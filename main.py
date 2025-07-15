@@ -7,53 +7,55 @@ import base64
 
 app = FastAPI()
 
-# CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
-# Load YOLOv8 model
-model = YOLO("yolov8n.pt")
+model = YOLO("yolov8n.pt")  # or any other model like yolov8s.pt
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
+    filename = file.filename
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Perform detection
     results = model(img)
-    result = results[0]
 
-    # Extract annotations
+    # Draw boxes on image for labeled_image_base64 (optional)
+    annotated_img = img.copy()
     annotations = []
-    for box in result.boxes:
-        b = box.xyxy[0].tolist()
-        cls = int(box.cls[0].item())
-        label = result.names[cls]
-        conf = float(box.conf[0].item())
+    for det in results[0].boxes:
+        cls_id = int(det.cls[0])
+        label = model.names[cls_id]
+        conf = float(det.conf[0])
+        x1, y1, x2, y2 = map(int, det.xyxy[0])
         annotations.append({
             "label": label,
-            "confidence": round(conf, 4),
+            "confidence": round(conf, 5),
             "bounding_box": {
-                "x_min": round(b[0], 2),
-                "y_min": round(b[1], 2),
-                "x_max": round(b[2], 2),
-                "y_max": round(b[3], 2)
+                "x_min": x1,
+                "y_min": y1,
+                "x_max": x2,
+                "y_max": y2
             }
         })
+        # Draw box (optional)
+        cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(annotated_img, f"{label} {conf:.2f}", (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-    # Draw boxes on image for preview
-    result_plotted = result.plot()
-    _, buffer = cv2.imencode('.jpg', result_plotted)
-    base64_img = base64.b64encode(buffer).decode('utf-8')
+    # Encode image to base64
+    _, buffer = cv2.imencode(".jpg", annotated_img)
+    labeled_base64 = base64.b64encode(buffer).decode("utf-8")
 
     return {
-        "image_id": file.filename,
+        "image_id": filename,
         "annotations": annotations,
-        "labeled_image_base64": base64_img
+        "labeled_image_base64": labeled_base64
     }
+
 
